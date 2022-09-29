@@ -2,9 +2,7 @@ import { Buffer } from 'buffer';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator, FlatList,
-  LogBox,
-  PermissionsAndroid,
-  Platform, StyleSheet, Text,
+  LogBox, StyleSheet, Text,
   TextInput,
   TouchableHighlight,
   View
@@ -12,7 +10,9 @@ import {
 import { BleManager, Device } from 'react-native-ble-plx';
 import { connect } from 'react-redux';
 import ActionCreator from '../actions';
+import * as Auth from '../auth';
 import * as U from '../util';
+
 
 LogBox.ignoreLogs(['new NativeEventEmitter']); // Ignore log notification by message
 LogBox.ignoreAllLogs(); //Ignore all log notifications
@@ -33,32 +33,16 @@ const Ble = React.memo((props) => {
 
   useEffect(() => {
     console.log('>> useEffect()');
-    if (!bleMgr) {
-      bleMgr = new BleManager();
-      bleMgr.onStateChange((state) => {
-        console.log('>> onStateChange:', state);
-      });
-      props.updateBleManager(bleMgr);
-    }
-    if (Platform.OS === 'android'){
-      if (Platform.Version >= 23) {
-        PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION).then((result) => {
-          if (result) {
-            console.log("Permission is OK");
-          } else {
-            PermissionsAndroid.requestPermission(PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION).then((result) => {
-              if (result) {
-                console.log("User accept");
-              } else {
-                console.log("User refuse");
-              }
-            });
-          }
+    Auth.requestPermissions().then(() => {
+      if (!bleMgr) {
+        bleMgr = new BleManager();
+        bleMgr.onStateChange((state) => {
+          console.log('>> onStateChange:', state);
         });
-      } else {
-        console.log("android version is under 23 :(")
+        props.updateBleManager(bleMgr);
       }
-    }
+    });
+    
     return () => {
       closeBleMgr();
     };
