@@ -1,4 +1,4 @@
-package com.bless.newarchitecture.components;
+package com.glowsoft.bless.newarchitecture.components;
 
 import com.facebook.jni.HybridData;
 import com.facebook.proguard.annotations.DoNotStrip;

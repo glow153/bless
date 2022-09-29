@@ -1,4 +1,4 @@
-package com.bless.newarchitecture.modules;
+package com.glowsoft.bless.newarchitecture.modules;
 
 import com.facebook.jni.HybridData;
 import com.facebook.react.ReactPackage;
