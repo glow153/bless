@@ -1,4 +1,3 @@
-import { Buffer } from 'buffer';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator, FlatList,
@@ -11,7 +10,8 @@ import { BleManager, Device } from 'react-native-ble-plx';
 import { connect } from 'react-redux';
 import ActionCreator from '../actions';
 import * as Auth from '../auth';
-import * as U from '../util';
+import { delay, getCurrentTimePacket } from '../util';
+import { connectBleDevice, readValue, sendPacket } from '../util/blue';
 
 
 LogBox.ignoreLogs(['new NativeEventEmitter']); // Ignore log notification by message
@@ -19,22 +19,25 @@ LogBox.ignoreAllLogs(); //Ignore all log notifications
 
 const MAX_SCAN_TIME = 10000;
 
-const Ble = React.memo((props) => {
-  var bleMgr: BleManager = null;
+var bleMgr = new BleManager();
+
+const Ble = (props) => {
   var _scanTime = 0;
   var _deviceList = [];
   const [isScanning, setScanning] = useState(false);
   const [scanTime, setScanTime] = useState(0);
   const [deviceList, setDeviceList] = useState(new Array());
-  const [selectedDevice, setSelectedDevice] = useState(null);
+  const [selectedDevice, setSelectedDevice] = useState(undefined);
   const [serviceUUID, setServiceUUID] = useState("FFB0");
   const [characteristicsUUID, setCharacteristicsUUID] = useState("FFB5");
-  const [packetText, setPacketText] = useState("0f 18 01");
+  const [packetText, setPacketText] = useState("0f1801");
+  const [searchDeviceName, setSearchDeviceName] = useState("mlight01");
 
   useEffect(() => {
     console.log('>> useEffect()');
     Auth.requestPermissions().then(() => {
       if (!bleMgr) {
+        console.log(dateObjToTimestamp(), '>> BLE Manager initiating...');
         bleMgr = new BleManager();
         bleMgr.onStateChange((state) => {
           console.log('>> onStateChange:', state);
@@ -51,9 +54,9 @@ const Ble = React.memo((props) => {
   const closeBleMgr = () => {
     console.log('>> closeBleMgr()');
     if (bleMgr) {
-      bleMgr.cancelDeviceConnection(selectedDevice.id);
+      bleMgr.cancelDeviceConnection(selectedDevice?.id);
       bleMgr.destroy();
-      bleMgr = null;
+      bleMgr = undefined;
     }
   };
 
@@ -61,13 +64,18 @@ const Ble = React.memo((props) => {
     console.log('>> stopScan()');
     setScanning(false);
     bleMgr.stopDeviceScan();
-    bleMgr.destroy();
-    bleMgr = null;
   };
 
+  const isDeviceNameMatches = (device: Device) => {
+    if (searchDeviceName) {
+      return device.name === searchDeviceName;
+    } else {
+      return false;
+    }
+  }
+
   const startScan = () => {
-    console.log('>> startScan()');
-    console.log('start scan...');
+    console.log('>> startScan(): start scan...');
     setScanning(true);
     // setScanTime(d => Date.now());
     _scanTime = Date.now();
@@ -90,13 +98,22 @@ const Ble = React.memo((props) => {
 
       if (device) {
         console.log("found device:", device.id);
-        if (_deviceList?.map(item => item.id).includes(device.id) === false) {
-          _deviceList.push(device);
-          setDeviceList(prevDeviceList => [...prevDeviceList, device]);
+        if (searchDeviceName) {
+          if (device.name === searchDeviceName) {
+            _deviceList.push(device);
+            setDeviceList(prevDeviceList => [...prevDeviceList, device]);
+            stopScan();
+            return;
+          }
+        } else {
+          if (_deviceList?.map(item => item.id).includes(device.id) === false) {
+            _deviceList.push(device);
+            setDeviceList(prevDeviceList => [...prevDeviceList, device]);
+          }
         }
       }
 
-      if (Date.now() - _scanTime >= MAX_SCAN_TIME) {
+      if (Date.now() - _scanTime >= MAX_SCAN_TIME || isDeviceNameMatches(device)) {
         console.log("stop scanning...");
         stopScan();
         return;
@@ -104,121 +121,75 @@ const Ble = React.memo((props) => {
     });
   };
 
-  const connectBleDevice = (device) => {
-    console.log('>> connectBleDevice()');
-    if (!bleMgr) {
-      bleMgr = new BleManager();
-    }
-    bleMgr.connectToDevice(device.id, {autoConnect:true}).then((device: Device) => {
-      (async () => {
-        const services = await device.discoverAllServicesAndCharacteristics()
-        const characteristic = await getServicesAndCharacteristics(services)
-        // console.log(">> services:", services);
-        // console.log(">> characteristic:", characteristic);
-        // console.log(">> Discovering services and characteristics", characteristic.uuid);
-        
-        setSelectedDevice(device);
-        props.updateBleConnectedDevice(device);
-        props.updateBleConnectedDeviceId(device.id);
-
-        // Initial packet sending
-        sendPacket(device, "FFB0", "FFB6", "DAFE EA38 BB29 5A00 00").then(() => {
-          return sendPacket(device, "FFB0", "FFBC", "1124 1311 0816 08");
-        }).then(() => {
-          console.log('@@@@@@@@ Successfully connected to', device.id, ',', device.name, '@@@@@@@@');
-        });
-
-      })();
-      return device.discoverAllServicesAndCharacteristics();
-    }).then((device) => {
-      // return this.setupNotifications(device);
-    }).then(() => {
-      console.log("Listening...");
-    }, (error) => {
-      this.alert("Connection error"+JSON.stringify(error));
-    })
-  };
-
-  const getServicesAndCharacteristics = (device: Device) => {
-    return new Promise((resolve, reject) => {
-      device.services().then(services => {
-        const characteristics = []
-        console.log("services:",services);
-        services.forEach((service, i) => {
-          service.characteristics().then(c => {
-            console.log("service.characteristics")
-            characteristics.push(c)
-            if (i === services.length - 1) {
-              const temp = characteristics.reduce(
-                (acc, current) => {
-                  return [...acc, ...current]
-                },
-                []
-              )
-              const dialog = temp.find(characteristic => characteristic.isWritableWithoutResponse)
-              if (!dialog) {
-                  reject('No writable characteristic')
-              }
-              resolve(dialog);
-            }
-          })
-        })
-      })
-    })
-  };
-
-  const sendPacket = (device: Device, serviceUUID, characteristicsUUID, packet: String) => {
-    console.log('>> sendPacket()');
-    const suuid = serviceUUID;
-    const cuuid = characteristicsUUID;
-    const data = Buffer.from(U.hexToBytes(packet.replace(/ /g, ''))).toString('base64');
-    
-    return device.writeCharacteristicWithResponseForService(suuid, cuuid, data)
-      .then((characteristic) => {
-        console.log('characteristic:', characteristic);
-        console.log('send packet:', serviceUUID, '-', characteristicsUUID, '-', data, `(${packet})`);
-      }).catch((e) => {
-        console.error('error occurred with send packet :', e);
-      })
-      ;
-  }
-
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={{flex:1}}>블루투스 디바이스 찾기</Text>
-        {isScanning ? <ActivityIndicator /> : null}
-        <TouchableHighlight
-          style={styles.btnScan}
-          underlayColor='#ddd'
-          activeOpacity={0.95}
-          onPress={()=>{
-            if (isScanning) {
-              stopScan();
-            } else {
-              startScan();
-            }
-          }}>
-          <Text style={styles.btnScanText}>{isScanning ? 'SCANNING...' : 'SCAN'}</Text>
-        </TouchableHighlight>
+        <View style={{flex:0}}>
+          <Text style={{flex:0}}>블루투스 디바이스 찾기</Text>
+        </View>
+        <View style={{flex:0, flexDirection: 'row'}}>
+          {isScanning ? <ActivityIndicator /> : null}
+          <TextInput value={searchDeviceName} style={{...styles.input, flex: 0, width: 100, marginRight: 7,}}
+            onChangeText={text => setSearchDeviceName(text)}
+          />
+          <TouchableHighlight
+            style={{...styles.btnScan, backgroundColor: isScanning ? '#349beb77' : '#349beb'}}
+            underlayColor='#64cbfb'
+            activeOpacity={0.95}
+            disabled={isScanning}
+            onPress={() => {
+              if (isScanning) {
+                stopScan();
+              } else {
+                startScan();
+              }
+            }}>
+            <Text style={styles.btnScanText}>SCAN</Text>
+          </TouchableHighlight>
+        </View>
       </View>
       <View style={styles.body}>
         <FlatList style={styles.list}
           data={deviceList}
-          renderItem={({item}) => {
+          renderItem={({item: deviceItem}) => {
             return (
               <TouchableHighlight
                 underlayColor='#ddd'
                 activeOpacity={0.95}
                 onPress={() => {
-                  console.log("selected device :", item.id, item.name);
-                  setSelectedDevice(item);
-                  connectBleDevice(item);
+                  console.log("selected device :", deviceItem.id, deviceItem.name);
+                  connectBleDevice(bleMgr, deviceItem, async (device) => {
+                    setSelectedDevice(device);
+                    props.updateBleConnectedDevice(device);
+                    props.updateBleConnectedDeviceId(device.id);
+
+                    //--------------- postprocessing for merlot lighting ---------------//
+                    // 2023-02-01 dhpark: 1. get security auth key
+                    await sendPacket(device, "FFB0", "FFB6", "0000 0000 0000 5A00 00");
+                    await delay(500); // 2023-02-02 dhpark: MUST DO THIS!!!
+                    
+                    // 2023-02-01 dhpark: 2. send security packet
+                    const authKey = await readValue(device, "FFB0", "FFB6", true);
+                    await sendPacket(device, "FFB0", "FFB6", authKey);
+                    await delay(500); // 2023-02-02 dhpark: MUST DO THIS!!!
+                    
+                    // 2023-02-01 dhpark: 3. send current time packet
+                    const datepacket = getCurrentTimePacket();
+                    await sendPacket(device, "FFB0", "FFBC", datepacket);
+                    await delay(500); // 2023-02-02 dhpark: MUST DO THIS!!!
+                    
+                    // 2023-02-02 dhpark: 4. if lighting is off or iteration mode,
+                    const onoff = await readValue(device, "FFB0", "FFBF", true);
+                    if (onoff.substring(0, 4) !== '0100') {
+                      await sendPacket(device, "FFB0", "FFBF", '010000000000000000'); // dhpark: turnOn packet
+                    }
+                    //--------------- postprocessing for merlot lighting ---------------//
+                  });
                 }}
                 style={styles.item}>
                 <>
-                  <Text style={styles.itemId}>id: {item.id}</Text>
-                  <Text style={[styles.itemName, {color: item.name ? 'black' : '#ccc'}]}>name: {item.name ?? 'N/A'}</Text>
+                  <Text style={styles.itemId}>id: {deviceItem.id}</Text>
+                  <Text style={[styles.itemName, {color: deviceItem.name ? 'black' : '#ccc'}]}>name: {deviceItem.name ?? 'N/A'}</Text>
                 </>
               </TouchableHighlight>
             );
@@ -228,14 +199,20 @@ const Ble = React.memo((props) => {
       <View style={styles.footer}>
         <View style={styles.inputGroup}>
           <Text style={styles.inputLabel}>Device Id</Text>
-          <TextInput value={selectedDevice?.id} style={styles.input}/>
+          <TextInput value={selectedDevice?.id} style={styles.input}
+            onChangeText={text => setSelectedDevice(text)}
+          />
         </View>
 
         <View style={styles.inputGroup}>
           <Text style={styles.inputLabel}>ServiceUUID</Text>
-          <TextInput value={serviceUUID} style={styles.input}/>
+          <TextInput value={serviceUUID} style={styles.input}
+            onChangeText={text => setServiceUUID(text)}
+          />
           <Text style={styles.inputLabel}>CharUUID</Text>
-          <TextInput value={characteristicsUUID} style={styles.input}/>
+          <TextInput value={characteristicsUUID} style={styles.input}
+            onChangeText={text => setCharacteristicsUUID(text)}
+          />
         </View>
 
         <View style={styles.inputGroup}>
@@ -248,14 +225,16 @@ const Ble = React.memo((props) => {
             style={styles.btnSend}
             underlayColor='#ddd'
             activeOpacity={0.95}
-            onPress={()=>{ sendPacket(selectedDevice, serviceUUID, characteristicsUUID, packetText); }}>
+            onPress={()=>{
+              sendPacket(selectedDevice, serviceUUID, characteristicsUUID, packetText);
+            }}>
             <Text style={styles.btnSendText}>Send</Text>
           </TouchableHighlight>
         </View>
       </View>
     </View>
   );
-});
+};
 
 const styles = StyleSheet.create({
   container: {
@@ -264,9 +243,9 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   header: {
-    flex: -1,
+    flex: 0,
     flexDirection: 'row',
-    justifyContent: 'flex-start',
+    justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 10,
   },
@@ -321,13 +300,17 @@ const styles = StyleSheet.create({
     borderColor: '#ccc'
   },
   btnScan: {
+    flex:0,
     borderWidth: 1,
     borderRadius: 7,
     borderColor: '#eee',
     backgroundColor: '#349beb',
     padding: 5,
+    justifyContent: 'center',
   },
   btnScanText: {
+    flex:0,
+    textAlign: 'center',
     color: "#eee",
   },
   btnSend: {
@@ -371,4 +354,4 @@ function mapDispatchToProps(dispatch) {
   };
 }
 
-export default connect(mapStateToProps, mapDispatchToProps)(Ble);
+export default connect(mapStateToProps, mapDispatchToProps)(React.memo(Ble));

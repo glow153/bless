@@ -35,6 +35,6 @@ export default (state = initialState, action) => {
     default:
       return state;
   }
-  console.log('new state:', newState);
+  // console.log('new state:', newState);
   return newState;
 };
